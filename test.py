@@ -30,7 +30,7 @@ if os.path.exists(STATE_FILE):
 else:
     state = {}
 
-# Compatibilidad con el historial antiguo de frankgamora
+# Mantener el historial antiguo de frankgamora
 if "sent" in state and "frankgamora" not in state:
     state["frankgamora"] = state.pop("sent")
 
@@ -80,7 +80,86 @@ for username in usernames:
 
     soup = BeautifulSoup(response.text, "html.parser")
 
-    # 3. Buscar imágenes de Stories
+    # =========================================================
+    # BUSCAR VIDEOS
+    # =========================================================
+
+    video_urls = []
+
+    for source in soup.find_all("source", src=True):
+        src = source.get("src")
+
+        if ".mp4" in src:
+            if src not in video_urls:
+                video_urls.append(src)
+
+    print("VIDEOS ENCONTRADOS:", len(video_urls))
+
+    # =========================================================
+    # PROCESAR VIDEOS
+    # =========================================================
+
+    for video_url in video_urls:
+
+        print("DESCARGANDO VIDEO...")
+
+        video_response = session.get(
+            video_url,
+            timeout=60
+        )
+
+        print("VIDEO STATUS:", video_response.status_code)
+        print("TAMAÑO VIDEO:", len(video_response.content))
+
+        if video_response.status_code != 200:
+            continue
+
+        video_data = video_response.content
+
+        # Identificador basado en el contenido
+        story_id = hashlib.sha256(video_data).hexdigest()
+
+        if story_id in sent_stories:
+            print("Video ya enviado, se ignora.")
+            continue
+
+        print(f"NUEVO VIDEO DE @{username}")
+
+        telegram_url = (
+            f"https://api.telegram.org/bot"
+            f"{telegram_token}/sendVideo"
+        )
+
+        files = {
+            "video": (
+                "story.mp4",
+                video_data,
+                "video/mp4"
+            )
+        }
+
+        data = {
+            "chat_id": telegram_chat_id,
+            "caption": f"🎥 Nueva Story de @{username}"
+        }
+
+        telegram_response = requests.post(
+            telegram_url,
+            data=data,
+            files=files,
+            timeout=120
+        )
+
+        print("TELEGRAM VIDEO STATUS:", telegram_response.status_code)
+
+        if telegram_response.status_code == 200:
+            sent_stories.append(story_id)
+            total_new += 1
+
+    # =========================================================
+    # BUSCAR IMAGENES
+    # =========================================================
+
     story_urls = []
 
     for link in soup.find_all("a", href=True):
@@ -92,14 +171,10 @@ for username in usernames:
 
     print("IMAGENES ENCONTRADAS:", len(story_urls))
 
-    if not story_urls:
-        print("NO HAY STORIES ACTIVAS")
-        state[username] = sent_stories
-        continue
+    # =========================================================
+    # PROCESAR IMAGENES
+    # =========================================================
 
-    new_stories = 0
-
-    # 4. Comprobar cada Story
     for story_url in story_urls:
 
         image_response = session.get(
@@ -114,7 +189,7 @@ for username in usernames:
 
         image_data = image_response.content
 
-        # Identificador basado en el contenido de la imagen
+        # Identificador basado en el contenido
         story_id = hashlib.sha256(image_data).hexdigest()
 
         if story_id in sent_stories:
@@ -123,7 +198,6 @@ for username in usernames:
 
         print(f"NUEVA STORY DE @{username}")
 
-        # 5. Enviar a Telegram
         telegram_url = (
             f"https://api.telegram.org/bot"
             f"{telegram_token}/sendPhoto"
@@ -149,19 +223,21 @@ for username in usernames:
             timeout=60
         )
 
-        print("TELEGRAM STATUS:", telegram_response.status_code)
+        print("TELEGRAM PHOTO STATUS:", telegram_response.status_code)
 
         if telegram_response.status_code == 200:
             sent_stories.append(story_id)
-            new_stories += 1
             total_new += 1
 
     # Guardar historial de esta cuenta
     state[username] = sent_stories[-100:]
 
-    print(f"NUEVAS STORIES DE @{username}:", new_stories)
+    print(
+        f"NUEVAS STORIES DE @{username}: "
+        f"{len(sent_stories)} registradas"
+    )
 
-# Guardar todo el historial
+# Guardar historial
 with open(STATE_FILE, "w") as f:
     json.dump(state, f, indent=2)
 
