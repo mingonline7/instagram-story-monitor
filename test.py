@@ -1,22 +1,35 @@
 import requests
 from bs4 import BeautifulSoup
 
-username = "frankgamora"
-
 url = "https://mediapuller.com/es/instagram-story-viewer"
 
 response = requests.get(url, timeout=30)
 
-print("Status:", response.status_code)
-print("Tamaño:", len(response.text))
+print("STATUS:", response.status_code)
+print("URL FINAL:", response.url)
 
 soup = BeautifulSoup(response.text, "html.parser")
 
-text = soup.get_text(" ", strip=True)
+print("\n--- FORMULARIOS ENCONTRADOS ---")
 
-if username.lower() in text.lower():
-    print("USUARIO ENCONTRADO")
-else:
-    print("USUARIO NO ENCONTRADO")
+for form in soup.find_all("form"):
+    print("FORM ACTION:", form.get("action"))
+    print("FORM METHOD:", form.get("method"))
 
-print(text[:3000])
+    for inp in form.find_all(["input", "button"]):
+        print(
+            "ELEMENTO:",
+            inp.name,
+            "name=", inp.get("name"),
+            "type=", inp.get("type"),
+            "value=", inp.get("value")
+        )
+
+print("\n--- ENLACES RELACIONADOS ---")
+
+for link in soup.find_all("a", href=True):
+    text = link.get_text(" ", strip=True)
+    href = link.get("href")
+
+    if "story" in text.lower() or "story" in href.lower():
+        print(text, "=>", href)
