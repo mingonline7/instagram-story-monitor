@@ -1,28 +1,26 @@
 name: Prueba MediaPuller
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-test:
-runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-latest
 
-```
-steps:
-  - name: Descargar código
-    uses: actions/checkout@v4
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
 
-  - name: Preparar Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.x'
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-  - name: Instalar dependencias
-    run: pip install requests beautifulsoup4
+      - name: Instalar dependencias
+        run: pip install requests beautifulsoup4
 
-  - name: Ejecutar prueba
-    env:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-    run: python test.py
-```
+      - name: Ejecutar prueba
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python test.py
