@@ -1,10 +1,22 @@
 import requests
+from bs4 import BeautifulSoup
+
+username = "frankgamora"
 
 url = "https://mediapuller.com/es/instagram-story-viewer"
 
-r = requests.get(url, timeout=20)
+response = requests.get(url, timeout=30)
 
-print("Status:", r.status_code)
-print("URL:", r.url)
-print("Tamaño:", len(r.text))
-print(r.text[:500])
+print("Status:", response.status_code)
+print("Tamaño:", len(response.text))
+
+soup = BeautifulSoup(response.text, "html.parser")
+
+text = soup.get_text(" ", strip=True)
+
+if username.lower() in text.lower():
+    print("USUARIO ENCONTRADO")
+else:
+    print("USUARIO NO ENCONTRADO")
+
+print(text[:3000])
