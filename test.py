@@ -15,7 +15,7 @@ STATE_FILE = "state.json"
 
 session = requests.Session()
 
-# 1. Cargar Stories que ya hemos enviado
+# Cargar historial
 if os.path.exists(STATE_FILE):
     with open(STATE_FILE, "r") as f:
         state = json.load(f)
@@ -24,7 +24,7 @@ else:
 
 sent_stories = state.get("sent", [])
 
-# 2. Abrir MediaPuller
+# Abrir MediaPuller
 response = session.get(media_puller_url, timeout=30)
 
 print("GET STATUS:", response.status_code)
@@ -40,12 +40,10 @@ if not token:
     print("NO SE ENCONTRO EL TOKEN DE MEDIAPULLER")
     exit()
 
-token_value = token.get("value")
-
-# 3. Buscar el perfil
+# Buscar perfil
 data = {
     "Url": username,
-    "__RequestVerificationToken": token_value
+    "__RequestVerificationToken": token.get("value")
 }
 
 response = session.post(
@@ -58,7 +56,7 @@ print("POST STATUS:", response.status_code)
 
 soup = BeautifulSoup(response.text, "html.parser")
 
-# 4. Buscar imágenes de Stories
+# Buscar imágenes
 story_urls = []
 
 for link in soup.find_all("a", href=True):
@@ -74,23 +72,11 @@ if not story_urls:
     print("NO SE ENCONTRARON STORIES")
     exit()
 
-# 5. Revisar cada Story
 new_stories = 0
 
 for story_url in story_urls:
 
-    # Creamos una identificación de la Story
-    story_id = hashlib.sha256(
-        story_url.encode()
-    ).hexdigest()
-
-    if story_id in sent_stories:
-        print("Story ya enviada, se ignora.")
-        continue
-
-    print("NUEVA STORY ENCONTRADA")
-
-    # Descargar imagen
+    # Descargar primero la imagen
     image_response = session.get(
         story_url,
         timeout=30
@@ -99,8 +85,18 @@ for story_url in story_urls:
     print("IMAGEN STATUS:", image_response.status_code)
 
     if image_response.status_code != 200:
-        print("NO SE PUDO DESCARGAR")
         continue
+
+    image_data = image_response.content
+
+    # Identificar la Story por el contenido de la imagen
+    story_id = hashlib.sha256(image_data).hexdigest()
+
+    if story_id in sent_stories:
+        print("Story ya enviada, se ignora.")
+        continue
+
+    print("NUEVA STORY ENCONTRADA")
 
     # Enviar a Telegram
     telegram_url = (
@@ -111,7 +107,7 @@ for story_url in story_urls:
     files = {
         "photo": (
             "story.jpg",
-            image_response.content,
+            image_data,
             "image/jpeg"
         )
     }
@@ -134,7 +130,7 @@ for story_url in story_urls:
         sent_stories.append(story_id)
         new_stories += 1
 
-# 6. Guardar las Stories enviadas
+# Guardar historial
 state["sent"] = sent_stories[-100:]
 
 with open(STATE_FILE, "w") as f:
