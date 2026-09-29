@@ -1,35 +1,52 @@
 import requests
 from bs4 import BeautifulSoup
 
+username = "frankgamora"
+
 url = "https://mediapuller.com/es/instagram-story-viewer"
 
-response = requests.get(url, timeout=30)
+session = requests.Session()
 
-print("STATUS:", response.status_code)
-print("URL FINAL:", response.url)
+# 1. Abrimos la página para obtener el token de seguridad
+response = session.get(url, timeout=30)
+
+print("GET STATUS:", response.status_code)
 
 soup = BeautifulSoup(response.text, "html.parser")
 
-print("\n--- FORMULARIOS ENCONTRADOS ---")
+token = soup.find(
+    "input",
+    {"name": "__RequestVerificationToken"}
+)
 
-for form in soup.find_all("form"):
-    print("FORM ACTION:", form.get("action"))
-    print("FORM METHOD:", form.get("method"))
+if not token:
+    print("NO SE ENCONTRO EL TOKEN")
+    exit()
 
-    for inp in form.find_all(["input", "button"]):
-        print(
-            "ELEMENTO:",
-            inp.name,
-            "name=", inp.get("name"),
-            "type=", inp.get("type"),
-            "value=", inp.get("value")
-        )
+token_value = token.get("value")
 
-print("\n--- ENLACES RELACIONADOS ---")
+print("TOKEN ENCONTRADO")
 
-for link in soup.find_all("a", href=True):
-    text = link.get_text(" ", strip=True)
-    href = link.get("href")
+# 2. Enviamos el usuario al formulario
+data = {
+    "Url": username,
+    "__RequestVerificationToken": token_value
+}
 
-    if "story" in text.lower() or "story" in href.lower():
-        print(text, "=>", href)
+response = session.post(
+    url,
+    data=data,
+    timeout=30
+)
+
+print("POST STATUS:", response.status_code)
+print("URL FINAL:", response.url)
+print("TAMAÑO:", len(response.text))
+
+# 3. Analizamos la respuesta
+soup = BeautifulSoup(response.text, "html.parser")
+
+text = soup.get_text(" ", strip=True)
+
+print("\n--- RESULTADO ---")
+print(text[:5000])
