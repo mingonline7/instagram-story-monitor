@@ -77,6 +77,3 @@ for link in soup.find_all("a", href=True):
         ".mp4", ".mov", ".m3u8"
     ]):
         print("ARCHIVO:", urljoin(response.url, href))
-
-print("\n--- RESULTADO ---")
-print(text[:5000])
