@@ -10,7 +10,7 @@ usernames = [
     "wesliph",
     "alex.facchi",
     "angel11ump",
-    "victorleon4"
+    "victorleon4",
     "hilaguneta",
 ]
 
