@@ -1,15 +1,18 @@
+import os
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
 
 username = "frankgamora"
 
-url = "https://mediapuller.com/es/instagram-story-viewer"
+media_puller_url = "https://mediapuller.com/es/instagram-story-viewer"
+
+telegram_token = os.environ["TELEGRAM_BOT_TOKEN"]
+telegram_chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
 session = requests.Session()
 
-# 1. Obtener la página y el token
-response = session.get(url, timeout=30)
+# 1. Abrimos MediaPuller para obtener el token de seguridad
+response = session.get(media_puller_url, timeout=30)
 
 print("GET STATUS:", response.status_code)
 
@@ -21,59 +24,85 @@ token = soup.find(
 )
 
 if not token:
-    print("NO SE ENCONTRO EL TOKEN")
+    print("NO SE ENCONTRO EL TOKEN DE MEDIAPULLER")
     exit()
 
 token_value = token.get("value")
 
-# 2. Realizar la búsqueda
+# 2. Buscamos el perfil
 data = {
     "Url": username,
     "__RequestVerificationToken": token_value
 }
 
 response = session.post(
-    url,
+    media_puller_url,
     data=data,
     timeout=30
 )
 
 print("POST STATUS:", response.status_code)
-print("URL FINAL:", response.url)
 
 soup = BeautifulSoup(response.text, "html.parser")
 
-print("\n--- IMAGENES ENCONTRADAS ---")
-
-for img in soup.find_all("img"):
-    src = img.get("src")
-    data_src = img.get("data-src")
-
-    if src:
-        print("IMG:", urljoin(response.url, src))
-
-    if data_src:
-        print("DATA-SRC:", urljoin(response.url, data_src))
-
-
-print("\n--- VIDEOS ENCONTRADOS ---")
-
-for video in soup.find_all("video"):
-    print("VIDEO:", urljoin(response.url, video.get("src", "")))
-
-    for source in video.find_all("source"):
-        src = source.get("src")
-        if src:
-            print("SOURCE:", urljoin(response.url, src))
-
-
-print("\n--- ENLACES A ARCHIVOS ---")
+# 3. Buscar enlaces directos a imágenes de Instagram
+story_urls = []
 
 for link in soup.find_all("a", href=True):
     href = link.get("href")
 
-    if any(ext in href.lower() for ext in [
-        ".jpg", ".jpeg", ".png", ".webp",
-        ".mp4", ".mov", ".m3u8"
-    ]):
-        print("ARCHIVO:", urljoin(response.url, href))
+    if "scontent-" in href and "/v/t51." in href:
+        if href not in story_urls:
+            story_urls.append(href)
+
+print("IMAGENES DE INSTAGRAM ENCONTRADAS:", len(story_urls))
+
+if not story_urls:
+    print("NO SE ENCONTRO NINGUNA STORY")
+    exit()
+
+# Usamos la primera imagen encontrada
+story_url = story_urls[0]
+
+print("DESCARGANDO STORY...")
+
+image_response = session.get(
+    story_url,
+    timeout=30
+)
+
+print("IMAGEN STATUS:", image_response.status_code)
+print("TAMAÑO:", len(image_response.content))
+
+if image_response.status_code != 200:
+    print("NO SE PUDO DESCARGAR LA IMAGEN")
+    exit()
+
+# 4. Enviar la imagen a Telegram
+telegram_url = (
+    f"https://api.telegram.org/bot"
+    f"{telegram_token}/sendPhoto"
+)
+
+files = {
+    "photo": (
+        "story.jpg",
+        image_response.content,
+        "image/jpeg"
+    )
+}
+
+data = {
+    "chat_id": telegram_chat_id,
+    "caption": f"📸 Nueva Story de @{username}"
+}
+
+telegram_response = requests.post(
+    telegram_url,
+    data=data,
+    files=files,
+    timeout=60
+)
+
+print("TELEGRAM STATUS:", telegram_response.status_code)
+print("TELEGRAM RESPUESTA:", telegram_response.text[:500])
