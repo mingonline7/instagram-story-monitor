@@ -16,8 +16,8 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Instalar requests
-        run: pip install requests
+- name: Instalar dependencias
+  run: pip install requests beautifulsoup4
 
       - name: Ejecutar prueba
         run: python test.py
