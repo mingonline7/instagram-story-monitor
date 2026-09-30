@@ -11,6 +11,7 @@ usernames = [
     "alex.facchi",
     "angel11ump",
     "victorleon4",
+    "alexjimenezdrums",
 ]
 
 media_puller_url = "https://mediapuller.com/es/instagram-story-viewer"
