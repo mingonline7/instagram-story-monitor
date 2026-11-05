@@ -1,9 +1,12 @@
 import os
 import json
-import hashlib
 import time
+import re
+import hashlib
 import requests
 
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -32,6 +35,8 @@ telegram_chat_id = os.environ["TELEGRAM_CHAT_ID"]
 STATE_FILE = "state.json"
 MAX_HISTORY = 500
 MAX_ATTEMPTS = 3
+
+CANARIAS = ZoneInfo("Atlantic/Canary")
 
 
 # =========================================================
@@ -64,15 +69,16 @@ session.headers.update({
 
 
 # =========================================================
-# CARGAR Y GUARDAR HISTORIAL
+# HISTORIAL
 # =========================================================
 
 if os.path.exists(STATE_FILE):
+
     with open(STATE_FILE, "r", encoding="utf-8") as f:
         state = json.load(f)
 
     if not isinstance(state, dict):
-        raise ValueError("El archivo state.json no contiene un historial válido.")
+        raise ValueError("state.json no contiene un historial válido.")
 
 else:
     state = {}
@@ -84,7 +90,6 @@ if "sent" in state and "frankgamora" not in state:
 
 
 def save_state():
-    """Guarda el historial de forma segura e inmediata."""
 
     temporary_file = STATE_FILE + ".tmp"
 
@@ -95,7 +100,61 @@ def save_state():
 
 
 # =========================================================
-# OBTENER STORIES DE MEDIAPULLER
+# CONVERTIR ANTIGÜEDAD EN FECHA Y HORA
+# =========================================================
+
+def get_publication_time(text):
+
+    if not text:
+        return None
+
+    text = text.lower()
+
+    units = {
+        "segundo": 1,
+        "minuto": 60,
+        "hora": 3600,
+        "día": 86400,
+        "dia": 86400,
+        "semana": 604800,
+        "mes": 2592000,
+        "año": 31536000,
+        "ano": 31536000,
+    }
+
+    matches = re.findall(
+        r"(\d+)\s*(segundos?|minutos?|horas?|días?|dias?|semanas?|meses?|años?|anos?)",
+        text
+    )
+
+    if not matches:
+        return None
+
+    total_seconds = 0
+
+    for number, unit in matches:
+
+        unit = unit.rstrip("s")
+
+        for key, seconds in units.items():
+
+            if unit == key:
+                total_seconds += int(number) * seconds
+                break
+
+    if total_seconds == 0:
+        return None
+
+    publication = (
+        datetime.now(CANARIAS)
+        - timedelta(seconds=total_seconds)
+    )
+
+    return publication.strftime("%H:%M · %d/%m/%Y")
+
+
+# =========================================================
+# CONSULTAR MEDIAPULLER
 # =========================================================
 
 def get_account_html(username):
@@ -105,12 +164,12 @@ def get_account_html(username):
     for attempt in range(1, MAX_ATTEMPTS + 1):
 
         try:
+
             print(
                 f"CONSULTA MEDIAPULLER: "
                 f"intento {attempt}/{MAX_ATTEMPTS}"
             )
 
-            # Abrir la página y obtener el token
             response = session.get(
                 mediapuller_url,
                 timeout=(15, 40)
@@ -128,7 +187,6 @@ def get_account_html(username):
             if not token or not token.get("value"):
                 raise ValueError("No se encontró el token de seguridad.")
 
-            # Consultar el perfil
             data = {
                 "Url": username,
                 "__RequestVerificationToken": token.get("value")
@@ -143,7 +201,7 @@ def get_account_html(username):
             response.raise_for_status()
 
             if not response.text.strip():
-                raise ValueError("MediaPuller devolvió una respuesta vacía.")
+                raise ValueError("Respuesta vacía de MediaPuller.")
 
             return response.text
 
@@ -151,14 +209,10 @@ def get_account_html(username):
 
             last_error = error
 
-            print(
-                f"ERROR CONSULTANDO @{username}: {error}"
-            )
+            print(f"ERROR CONSULTANDO @{username}: {error}")
 
             if attempt < MAX_ATTEMPTS:
-                wait_time = attempt * 3
-                print(f"Esperando {wait_time} segundos...")
-                time.sleep(wait_time)
+                time.sleep(attempt * 3)
 
     raise RuntimeError(
         f"No se pudo consultar @{username}: {last_error}"
@@ -166,85 +220,153 @@ def get_account_html(username):
 
 
 # =========================================================
-# DETECTAR VÍDEOS
+# EXTRAER STORIES Y SUS FECHAS
 # =========================================================
 
-def find_videos(soup):
+def extract_stories(soup):
 
-    video_urls = set()
+    stories = []
 
-    # Sources habituales
-    for source in soup.find_all("source", src=True):
+    # Cada tarjeta contiene su propio archivo y su publicación
+    cards = soup.select(".thumbnail.storyViewerItem")
 
-        src = source.get("src")
+    print("TARJETAS DE STORIES ENCONTRADAS:", len(cards))
 
-        if src and ".mp4" in src.lower():
-            video_urls.add(src)
+    for card in cards:
 
-    # Vídeos con src directo
-    for video in soup.find_all("video", src=True):
+        media = card.select_one(".storyViewerMedia")
 
-        src = video.get("src")
-
-        if src and ".mp4" in src.lower():
-            video_urls.add(src)
-
-    return list(video_urls)
-
-
-# =========================================================
-# DETECTAR IMÁGENES
-# =========================================================
-
-def find_images(soup):
-
-    image_urls = set()
-
-    def valid_instagram_image(url):
-
-        if not url:
-            return False
-
-        return (
-            "scontent-" in url
-            and "/v/t51." in url
+        published_element = card.select_one(
+            ".storyViewerPublishedDate"
         )
 
-    # Enlaces directos a imágenes
-    for link in soup.find_all("a", href=True):
+        published_text = (
+            published_element.get_text(" ", strip=True)
+            if published_element else None
+        )
 
-        href = link.get("href")
+        publication_time = get_publication_time(
+            published_text
+        )
 
-        if valid_instagram_image(href):
-            image_urls.add(href)
+        if media:
 
-    # Imágenes incluidas directamente en la página
-    for img in soup.find_all("img"):
+            media_tag = media.name.lower()
 
-        # Evitar imágenes que estén dentro de un vídeo
-        if img.find_parent("video"):
+            if media_tag == "video":
+
+                source = media.find("source", src=True)
+
+                if source:
+                    media_url = source.get("src")
+                else:
+                    media_url = media.get("src")
+
+                media_type = "video"
+
+            else:
+
+                download_link = card.select_one(
+                    ".storyViewerMediaOpen[href]"
+                )
+
+                if download_link:
+                    media_url = download_link.get("href")
+                else:
+                    media_url = media.get("src")
+
+                media_type = "photo"
+
+        else:
+
+            source = card.find("source", src=True)
+
+            download_link = card.select_one(
+                ".storyViewerMediaOpen[href]"
+            )
+
+            if source:
+                media_url = source.get("src")
+                media_type = "video"
+
+            elif download_link:
+                media_url = download_link.get("href")
+
+                media_type = (
+                    "video"
+                    if ".mp4" in media_url.lower()
+                    else "photo"
+                )
+
+            else:
+                continue
+
+        if not media_url:
             continue
 
-        src = img.get("src")
+        if ".mp4" in media_url.lower():
+            media_type = "video"
 
-        if valid_instagram_image(src):
-            image_urls.add(src)
+        stories.append({
+            "url": media_url,
+            "type": media_type,
+            "publication": publication_time,
+            "published_text": published_text
+        })
 
-        # También revisar srcset
-        srcset = img.get("srcset", "")
+    # Compatibilidad si MediaPuller cambia su estructura
+    if not cards:
 
-        for item in srcset.split(","):
+        print(
+            "AVISO: No se encontraron tarjetas individuales. "
+            "Se utiliza el detector anterior."
+        )
 
-            candidate = item.strip().split(" ")[0]
+        for source in soup.find_all("source", src=True):
 
-            if valid_instagram_image(candidate):
-                image_urls.add(candidate)
+            url = source.get("src")
 
-    return list(image_urls)
+            if url and ".mp4" in url.lower():
+
+                stories.append({
+                    "url": url,
+                    "type": "video",
+                    "publication": None,
+                    "published_text": None
+                })
+
+        for link in soup.find_all("a", href=True):
+
+            url = link.get("href")
+
+            if (
+                url
+                and "scontent-" in url
+                and "/v/t51." in url
+            ):
+
+                stories.append({
+                    "url": url,
+                    "type": "photo",
+                    "publication": None,
+                    "published_text": None
+                })
+
+    # Evitar repetir enlaces dentro de la misma consulta
+    unique_stories = []
+    seen = set()
+
+    for story in stories:
+
+        if story["url"] not in seen:
+            seen.add(story["url"])
+            unique_stories.append(story)
+
+    return unique_stories
 
 
 # =========================================================
-# DESCARGAR CONTENIDO CON REINTENTOS
+# DESCARGAR MEDIA CON REINTENTOS
 # =========================================================
 
 def download_media(url):
@@ -263,7 +385,7 @@ def download_media(url):
             response.raise_for_status()
 
             if not response.content:
-                raise ValueError("El archivo descargado está vacío.")
+                raise ValueError("Archivo vacío.")
 
             return response.content
 
@@ -273,14 +395,14 @@ def download_media(url):
 
             print(
                 f"ERROR DESCARGANDO MEDIA "
-                f"(intento {attempt}/{MAX_ATTEMPTS}): {error}"
+                f"({attempt}/{MAX_ATTEMPTS}): {error}"
             )
 
             if attempt < MAX_ATTEMPTS:
                 time.sleep(attempt * 2)
 
     raise RuntimeError(
-        f"No se pudo descargar el contenido: {last_error}"
+        f"No se pudo descargar el archivo: {last_error}"
     )
 
 
@@ -288,11 +410,11 @@ def download_media(url):
 # ENVIAR A TELEGRAM
 # =========================================================
 
-def send_to_telegram(media_data, username, media_type):
+def send_to_telegram(media_data, username, media_type, publication):
 
     if media_type == "video":
 
-        telegram_method = "sendVideo"
+        method = "sendVideo"
 
         files = {
             "video": (
@@ -302,11 +424,11 @@ def send_to_telegram(media_data, username, media_type):
             )
         }
 
-        caption = f"🎥 Nueva Story de @{username}"
+        title = "🎥 Nueva Story"
 
     else:
 
-        telegram_method = "sendPhoto"
+        method = "sendPhoto"
 
         files = {
             "photo": (
@@ -316,11 +438,25 @@ def send_to_telegram(media_data, username, media_type):
             )
         }
 
-        caption = f"📸 Nueva Story de @{username}"
+        title = "📸 Nueva Story"
+
+    if publication:
+
+        date_line = f"🕒 {publication} (Canarias)"
+
+    else:
+
+        date_line = "🕒 Hora de publicación no disponible"
+
+    caption = (
+        f"{title}\n\n"
+        f"#{username}\n\n"
+        f"{date_line}"
+    )
 
     telegram_url = (
         f"https://api.telegram.org/bot"
-        f"{telegram_token}/{telegram_method}"
+        f"{telegram_token}/{method}"
     )
 
     data = {
@@ -328,9 +464,6 @@ def send_to_telegram(media_data, username, media_type):
         "caption": caption
     }
 
-    # No repetir automáticamente los envíos a Telegram:
-    # si hay un timeout, no podemos saber con certeza
-    # si Telegram recibió ya el archivo.
     response = requests.post(
         telegram_url,
         data=data,
@@ -348,13 +481,11 @@ def send_to_telegram(media_data, username, media_type):
     result = response.json()
 
     if not result.get("ok"):
-        raise RuntimeError(
-            f"Telegram rechazó el envío: {result}"
-        )
+        raise RuntimeError(f"Telegram rechazó el envío: {result}")
 
 
 # =========================================================
-# PROCESAR STORIES DE UNA CUENTA
+# PROCESAR CUENTA
 # =========================================================
 
 def process_account(username):
@@ -371,119 +502,67 @@ def process_account(username):
     if not isinstance(sent_stories, list):
         sent_stories = []
 
-    # Consultar MediaPuller
     html = get_account_html(username)
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Detectar contenido
-    video_urls = find_videos(soup)
-    image_urls = find_images(soup)
+    stories = extract_stories(soup)
 
-    print("VÍDEOS ENCONTRADOS:", len(video_urls))
-    print("IMÁGENES ENCONTRADAS:", len(image_urls))
+    print("TOTAL DE STORIES DETECTADAS:", len(stories))
 
     account_new = 0
 
-    # -----------------------------------------------------
-    # PROCESAR VÍDEOS
-    # -----------------------------------------------------
-
-    for video_url in video_urls:
+    for story in stories:
 
         try:
 
-            print("DESCARGANDO VÍDEO...")
+            print("")
+            print("TIPO:", story["type"])
+            print("PUBLICACIÓN:", story["published_text"])
 
-            media_data = download_media(video_url)
+            print("DESCARGANDO MEDIA...")
+
+            media_data = download_media(story["url"])
 
             story_id = hashlib.sha256(
                 media_data
             ).hexdigest()
 
             if story_id in sent_stories:
-                print("Vídeo ya enviado. Se ignora.")
+
+                print("Story ya enviada. Se ignora.")
                 continue
 
-            print(f"NUEVO VÍDEO DE @{username}")
+            print(f"NUEVA STORY DE @{username}")
 
             send_to_telegram(
                 media_data,
                 username,
-                "video"
+                story["type"],
+                story["publication"]
             )
 
             sent_stories.append(story_id)
 
-            # Guardar inmediatamente tras el envío
             state[username] = sent_stories[-MAX_HISTORY:]
             sent_stories = state[username]
+
             save_state()
 
             total_new += 1
             account_new += 1
 
-            print("VÍDEO ENVIADO Y GUARDADO.")
+            print("STORY ENVIADA Y GUARDADA.")
 
         except Exception as error:
 
             print(
-                f"ERROR PROCESANDO VÍDEO DE "
+                f"ERROR PROCESANDO STORY DE "
                 f"@{username}: {error}"
             )
 
             continue
 
-    # -----------------------------------------------------
-    # PROCESAR IMÁGENES
-    # -----------------------------------------------------
-
-    for image_url in image_urls:
-
-        try:
-
-            print("DESCARGANDO IMAGEN...")
-
-            media_data = download_media(image_url)
-
-            story_id = hashlib.sha256(
-                media_data
-            ).hexdigest()
-
-            if story_id in sent_stories:
-                print("Imagen ya enviada. Se ignora.")
-                continue
-
-            print(f"NUEVA IMAGEN DE @{username}")
-
-            send_to_telegram(
-                media_data,
-                username,
-                "photo"
-            )
-
-            sent_stories.append(story_id)
-
-            # Guardar inmediatamente tras el envío
-            state[username] = sent_stories[-MAX_HISTORY:]
-            sent_stories = state[username]
-            save_state()
-
-            total_new += 1
-            account_new += 1
-
-            print("IMAGEN ENVIADA Y GUARDADA.")
-
-        except Exception as error:
-
-            print(
-                f"ERROR PROCESANDO IMAGEN DE "
-                f"@{username}: {error}"
-            )
-
-            continue
-
-    # Guardar también aunque no haya contenido nuevo
     state[username] = sent_stories[-MAX_HISTORY:]
     save_state()
 
@@ -515,15 +594,12 @@ for username in usernames:
 
         failed_accounts.append(username)
 
-        print("")
         print(f"FALLO EN @{username}: {error}")
         print("Se continúa con la siguiente cuenta.")
 
-        continue
-
 
 # =========================================================
-# RESUMEN FINAL
+# RESUMEN
 # =========================================================
 
 print("")
