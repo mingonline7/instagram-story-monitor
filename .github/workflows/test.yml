@@ -4,13 +4,19 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '*/5 * * * *'
-    
+
+# Evitar ejecuciones simultáneas
+concurrency:
+  group: instagram-story-monitor
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Descargar código
@@ -24,16 +30,23 @@ jobs:
       - name: Instalar dependencias
         run: pip install requests beautifulsoup4
 
-      - name: Ejecutar prueba
+      - name: Ejecutar monitor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python test.py
 
-      - name: Guardar estado
+      - name: Guardar historial
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add state.json
-          git diff --cached --quiet || git commit -m "Actualizar estado de Stories"
-          git push
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Actualizar historial de Stories"
+            git push
+          else
+            echo "No hay cambios en el historial."
+          fi
